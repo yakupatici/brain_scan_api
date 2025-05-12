@@ -8,6 +8,9 @@ import io
 from PIL import Image, UnidentifiedImageError
 import onnxruntime as ort
 import time
+import requests
+import urllib.request
+from pathlib import Path
 
 # Logging yapılandırması
 logging.basicConfig(
@@ -31,11 +34,48 @@ app.add_middleware(
 # Sınıf etiketleri
 CLASS_NAMES = ["Sağlıklı", "Enfarkt", "Tümör", "Kanama"]
 
-# Model yolu
-MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "InceptionOnnx.onnx")
+# Model yolu için çevre değişkenini kullanabilirsiniz
+MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "InceptionOnnx.onnx"))
+
+# Model URL'si (Google Drive veya başka bir yerden)
+MODEL_URL = os.environ.get("MODEL_URL", "https://drive.google.com/uc?export=download&id=1ghlzq6mfJU6iWA_5iZWHkW0q_NXEwXKR")
 
 # Global model nesnesi
 ort_session = None
+
+def download_model(url, save_path):
+    """Verilen URL'den model dosyasını indir ve belirtilen yola kaydet"""
+    try:
+        logger.info(f"Model indiriliyor: {url}")
+        
+        # Dizini oluştur
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        # Google Drive için özel işleme
+        if "drive.google.com" in url:
+            # Google Drive URL'sinden dosyayı indir
+            response = requests.get(url, stream=True)
+            file_size = int(response.headers.get("Content-Length", 0))
+            
+            # Akış durumunu log'la
+            downloaded = 0
+            logger.info(f"Dosya boyutu: {file_size / (1024*1024):.2f} MB")
+            
+            with open(save_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=1024*1024):  # 1MB chunks
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        logger.info(f"İndiriliyor: {downloaded / (1024*1024):.2f} MB / {file_size / (1024*1024):.2f} MB")
+        else:
+            # Normal URL için direkt indir
+            urllib.request.urlretrieve(url, save_path)
+        
+        logger.info(f"Model başarıyla indirildi: {save_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Model indirilirken hata: {str(e)}")
+        return False
 
 @app.on_event("startup")
 async def startup_event():
@@ -43,18 +83,34 @@ async def startup_event():
     global ort_session
     try:
         logger.info(f"ONNX Runtime sürümü: {ort.__version__}")
-        logger.info(f"Model yükleniyor: {MODEL_PATH}")
+        logger.info(f"Model yolu: {MODEL_PATH}")
         
         # Model dosyasının varlığını kontrol et
         if not os.path.exists(MODEL_PATH):
-            logger.error(f"Model dosyası bulunamadı: {MODEL_PATH}")
+            logger.warning(f"Model dosyası bulunamadı: {MODEL_PATH}")
+            
+            # Çalışma ortamı bilgisini logla
             logger.info("Çalışma dizini: " + os.getcwd())
-            logger.info("Dizin içeriği: " + str(os.listdir(os.path.dirname(MODEL_PATH))))
-            raise FileNotFoundError(f"Model dosyası bulunamadı: {MODEL_PATH}")
+            
+            model_dir = os.path.dirname(MODEL_PATH)
+            if os.path.exists(model_dir):
+                logger.info("Model dizini mevcut. İçerik: " + str(os.listdir(model_dir)))
+            else:
+                logger.info(f"Model dizini mevcut değil: {model_dir}")
+            
+            # Model dosyasını indir
+            if MODEL_URL:
+                logger.info(f"Model URL belirtildi, indirme deneniyor: {MODEL_URL}")
+                success = download_model(MODEL_URL, MODEL_PATH)
+                if not success:
+                    raise FileNotFoundError(f"Model dosyası indirilemedi: {MODEL_URL}")
+            else:
+                raise FileNotFoundError(f"Model dosyası bulunamadı ve MODEL_URL belirtilmedi")
         
         # Modeli yükle
         start_time = time.time()
-        ort_session = ort.InferenceSession(MODEL_PATH)
+        logger.info(f"Model yükleniyor: {MODEL_PATH}, Dosya boyutu: {os.path.getsize(MODEL_PATH) / (1024*1024):.2f} MB")
+        ort_session = ort.InferenceSession(MODEL_PATH, providers=['CPUExecutionProvider'])
         load_time = time.time() - start_time
         logger.info(f"Model başarıyla yüklendi ({load_time:.2f} saniye)")
         
@@ -75,6 +131,16 @@ async def startup_event():
 async def root():
     """Sağlık kontrolü için endpoint"""
     return {"message": "Brain Scan Analysis API aktif", "model_loaded": ort_session is not None}
+
+@app.get("/health")
+async def health():
+    """API sağlık durumu için endpoint"""
+    return {
+        "status": "healthy" if ort_session is not None else "not_ready",
+        "model_loaded": ort_session is not None,
+        "model_path": MODEL_PATH,
+        "model_exists": os.path.exists(MODEL_PATH) if MODEL_PATH else False
+    }
 
 def preprocess_image(image_bytes, target_size=(299, 299)):
     """Görüntüyü modele uygun formata dönüştür"""
@@ -117,7 +183,17 @@ async def predict(file: UploadFile = File(...)):
     # Model kontrolü
     if ort_session is None:
         logger.error("Model yüklü değil, tahmin yapılamıyor")
-        raise HTTPException(status_code=503, detail="Model yüklü değil, lütfen daha sonra tekrar deneyin")
+        
+        # Modeli yeniden yüklemeyi dene
+        try:
+            logger.info("Model yeniden yüklenmeye çalışılıyor...")
+            await startup_event()
+        except Exception as e:
+            logger.error(f"Model yeniden yüklenemedi: {str(e)}")
+            
+        # Hala yüklenemediyse hata döndür
+        if ort_session is None:
+            raise HTTPException(status_code=503, detail="Model yüklü değil, lütfen daha sonra tekrar deneyin")
     
     start_time = time.time()
     
