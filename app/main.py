@@ -179,80 +179,66 @@ def preprocess_image(image_bytes, target_size=(299, 299)):
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """Beyin taraması görüntüsünü analiz et"""
-    # Model kontrolü
-    if ort_session is None:
-        logger.error("Model yüklü değil, tahmin yapılamıyor")
-        
-        # Modeli yeniden yüklemeyi dene
-        try:
-            logger.info("Model yeniden yüklenmeye çalışılıyor...")
-            await startup_event()
-        except Exception as e:
-            logger.error(f"Model yeniden yüklenemedi: {str(e)}")
-            
-        # Hala yüklenemediyse hata döndür
-        if ort_session is None:
-            raise HTTPException(status_code=503, detail="Model yüklü değil, lütfen daha sonra tekrar deneyin")
-    
+    """Beyin taraması görüntüsünü analiz et (ŞİMDİLİK BASİTLEŞTİRİLDİ)"""
+    logger.info(f"--- /predict isteği alındı: {file.filename} ---") # <-- YENİ LOG
+
+    # Model kontrolü - ŞİMDİLİK DEVRE DIŞI
+    # if ort_session is None:
+    #     logger.error("Model yüklü değil, tahmin yapılamıyor")
+    #     # ... (rest of the original model check code) ...
+    #     if ort_session is None:
+    #         raise HTTPException(status_code=503, detail="Model yüklü değil, lütfen daha sonra tekrar deneyin")
+
     start_time = time.time()
-    
+
     try:
-        logger.info(f"Dosya alındı: {file.filename}, {file.content_type}")
-        
-        # Dosya içeriğini oku
-        contents = await file.read()
-        
-        if len(contents) == 0:
-            logger.error("Boş dosya yüklendi")
-            raise HTTPException(status_code=400, detail="Boş dosya yüklendi")
-        
-        # Görüntüyü ön işle
-        try:
-            logger.info("Görüntü ön işleniyor")
-            img_processed = preprocess_image(contents)
-            logger.info(f"Görüntü ön işlendi, şekil: {img_processed.shape}")
-        except ValueError as e:
-            logger.error(f"Görüntü işleme hatası: {str(e)}")
-            raise HTTPException(status_code=400, detail=str(e))
-        
-        # ONNX modeliyle tahminde bulun
-        try:
-            logger.info("Model tahmini yapılıyor")
-            input_name = ort_session.get_inputs()[0].name
-            outputs = ort_session.run(None, {input_name: img_processed})
-            logger.info(f"Tahmin tamamlandı, çıktı şekli: {outputs[0].shape}")
-        except Exception as e:
-            logger.error(f"Tahmin hatası: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Model tahmini başarısız: {str(e)}")
-        
-        # Sonuçları işle
-        scores = outputs[0][0]
-        logger.info(f"Ham skorlar: {scores}")
-        
-        # Softmax uygula (isteğe bağlı)
-        exp_scores = np.exp(scores - np.max(scores))
-        probs = exp_scores / exp_scores.sum()
-        
-        # En yüksek olasılıklı sınıfı bul
-        predicted_class_idx = np.argmax(probs)
-        prediction = CLASS_NAMES[predicted_class_idx]
-        confidence = float(probs[predicted_class_idx] * 100)
-        
-        # Tüm sınıflar için skorlar
-        all_scores = {CLASS_NAMES[i]: float(probs[i] * 100) for i in range(len(CLASS_NAMES))}
-        
+        logger.info(f"Dosya bilgisi: {file.filename}, {file.content_type}")
+
+        # --- GEÇİCİ OLARAK DEVRE DIŞI BIRAKILAN KOD ---
+        # contents = await file.read()
+        # if len(contents) == 0:
+        #     logger.error("Boş dosya yüklendi")
+        #     raise HTTPException(status_code=400, detail="Boş dosya yüklendi")
+        #
+        # try:
+        #     logger.info("Görüntü ön işleniyor")
+        #     img_processed = preprocess_image(contents)
+        #     logger.info(f"Görüntü ön işlendi, şekil: {img_processed.shape}")
+        # except ValueError as e:
+        #     logger.error(f"Görüntü işleme hatası: {str(e)}")
+        #     raise HTTPException(status_code=400, detail=str(e))
+        #
+        # try:
+        #     logger.info("Model tahmini yapılıyor")
+        #     input_name = ort_session.get_inputs()[0].name
+        #     outputs = ort_session.run(None, {input_name: img_processed})
+        #     logger.info(f"Tahmin tamamlandı, çıktı şekli: {outputs[0].shape}")
+        # except Exception as e:
+        #     logger.error(f"Tahmin hatası: {str(e)}")
+        #     raise HTTPException(status_code=500, detail=f"Model tahmini başarısız: {str(e)}")
+        #
+        # scores = outputs[0][0]
+        # logger.info(f"Ham skorlar: {scores}")
+        # exp_scores = np.exp(scores - np.max(scores))
+        # probs = exp_scores / exp_scores.sum()
+        # predicted_class_idx = np.argmax(probs)
+        # prediction = CLASS_NAMES[predicted_class_idx]
+        # confidence = float(probs[predicted_class_idx] * 100)
+        # all_scores = {CLASS_NAMES[i]: float(probs[i] * 100) for i in range(len(CLASS_NAMES))}
+        # --- DEVRE DIŞI KOD SONU ---
+
         processing_time = time.time() - start_time
-        logger.info(f"Tahmin: {prediction}, Güven: {confidence:.1f}%, İşlem süresi: {processing_time:.2f} saniye")
-        
-        # Sonucu döndür
+        logger.info(f"--- /predict isteği başarıyla işlendi (basitleştirilmiş mod) ---") # <-- YENİ LOG
+
+        # Geçici, basit yanıt döndür
         return JSONResponse({
-            "prediction": prediction,
-            "confidence": confidence,
-            "scores": all_scores,
+            "prediction": "GEÇİCİ YANIT",
+            "confidence": 99.9,
+            "scores": {k: 25.0 for k in CLASS_NAMES},
             "processing_time_ms": round(processing_time * 1000)
         })
-    
+
     except Exception as e:
-        logger.error(f"İşlem hatası: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"İşlem hatası: {str(e)}") 
+        # Bu blok normalde devre dışı bırakılan kod içindeki hataları yakalar
+        logger.error(f"İşlem hatası (beklenmeyen): {str(e)}")
+        raise HTTPException(status_code=500, detail=f"İşlem hatası (beklenmeyen): {str(e)}") 
